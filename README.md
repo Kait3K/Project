@@ -12,6 +12,7 @@ python3 compare_activations.py
 出力:
 - 損失グラフ: `results/loss_comparison.png`
 - 端末サマリ: 最終損失・最終精度・指定精度に達したエポック（平均±標準偏差）
+- （任意）`n` ごとの loss 減少カーブ: `results/custom_n_comparison.png`
 
 ## 主要オプション
 
@@ -29,6 +30,18 @@ python3 compare_activations.py --num-seeds 10 --seed 42
 
 ```bash
 python3 compare_activations.py --seed-list 7,42,123,999
+```
+
+`n` を増やして custom 活性化の比較グラフを作る:
+
+```bash
+python3 compare_activations.py --num-seeds 10 --seed 42 --custom-n-list 0,1,2,3,4,5
+```
+
+出力先を変更:
+
+```bash
+python3 compare_activations.py --custom-n-list 0,2,4,6 --custom-n-plot-out results/n_sweep.png
 ```
 
 ## オリジナル活性化関数の編集場所
