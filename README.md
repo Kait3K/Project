@@ -26,3 +26,12 @@ python3 compare_activations.py --epochs 700 --lr 0.06 --hidden 48 --acc-threshol
 
 この2つをセットで変更してください。
 導関数が間違っていると、学習速度比較が正しく評価できません。
+
+現在の `custom` は、調和振動子の固有関数 `psi_n(x)` を使って
+`x + alpha * psi_n(beta * x)` として定義しています。
+
+切り替えパラメータ:
+
+```bash
+python3 compare_activations.py --custom-n 2 --custom-alpha 0.75 --custom-beta 1.0
+```

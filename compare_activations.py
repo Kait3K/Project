@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import math
 import os
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
@@ -48,15 +49,48 @@ def sigmoid_grad(x: Array) -> Array:
     return s * (1.0 - s)
 
 
-def custom_activation(x: Array) -> Array:
-    # Original example: Swish + small tanh term (smooth and non-monotonic around 0)
-    return x * sigmoid(x) + 0.1 * np.tanh(x)
+def hermite_polynomial(n: int, x: Array) -> Array:
+    if n < 0:
+        raise ValueError("n must be >= 0")
+    if n == 0:
+        return np.ones_like(x)
+    if n == 1:
+        return 2.0 * x
+    h_nm2 = np.ones_like(x)
+    h_nm1 = 2.0 * x
+    for k in range(1, n):
+        h_n = 2.0 * x * h_nm1 - 2.0 * k * h_nm2
+        h_nm2, h_nm1 = h_nm1, h_n
+    return h_nm1
 
 
-def custom_activation_grad(x: Array) -> Array:
-    s = sigmoid(x)
-    t = np.tanh(x)
-    return s + x * s * (1.0 - s) + 0.1 * (1.0 - t * t)
+def harmonic_oscillator_eigenfunction(n: int, x: Array) -> Array:
+    # Dimensionless 1D harmonic oscillator eigenfunction: psi_n(x)
+    h_n = hermite_polynomial(n, x)
+    norm = 1.0 / math.sqrt((2.0 ** n) * math.factorial(n) * math.sqrt(math.pi))
+    return norm * h_n * np.exp(-0.5 * x * x)
+
+
+def harmonic_oscillator_eigenfunction_grad(n: int, x: Array) -> Array:
+    h_n = hermite_polynomial(n, x)
+    if n == 0:
+        h_nm1 = np.zeros_like(x)
+    else:
+        h_nm1 = hermite_polynomial(n - 1, x)
+    norm = 1.0 / math.sqrt((2.0 ** n) * math.factorial(n) * math.sqrt(math.pi))
+    # d/dx [H_n(x) exp(-x^2/2)] = (2n H_{n-1}(x) - x H_n(x)) exp(-x^2/2)
+    return norm * (2.0 * n * h_nm1 - x * h_n) * np.exp(-0.5 * x * x)
+
+
+def custom_activation(x: Array, n: int = 2, alpha: float = 0.75, beta: float = 1.0) -> Array:
+    # Identity + scaled HO eigenfunction to keep gradients stable.
+    z = beta * x
+    return x + alpha * harmonic_oscillator_eigenfunction(n, z)
+
+
+def custom_activation_grad(x: Array, n: int = 2, alpha: float = 0.75, beta: float = 1.0) -> Array:
+    z = beta * x
+    return 1.0 + alpha * beta * harmonic_oscillator_eigenfunction_grad(n, z)
 
 
 def make_xor_data(n_samples: int, noise: float, seed: int) -> Tuple[Array, Array]:
@@ -204,13 +238,24 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--acc-threshold", type=float, default=0.90)
     parser.add_argument("--out", type=str, default="results/loss_comparison.png")
+    parser.add_argument("--custom-n", type=int, default=2)
+    parser.add_argument("--custom-alpha", type=float, default=0.75)
+    parser.add_argument("--custom-beta", type=float, default=1.0)
     args = parser.parse_args()
+    if args.custom_n < 0:
+        raise ValueError("--custom-n must be >= 0")
 
     acts = [
         Activation("relu", relu, relu_grad),
         Activation("tanh", tanh, tanh_grad),
         Activation("sigmoid", sigmoid, sigmoid_grad),
-        Activation("custom", custom_activation, custom_activation_grad),
+        Activation(
+            f"custom(n={args.custom_n})",
+            lambda x: custom_activation(x, n=args.custom_n, alpha=args.custom_alpha, beta=args.custom_beta),
+            lambda x: custom_activation_grad(
+                x, n=args.custom_n, alpha=args.custom_alpha, beta=args.custom_beta
+            ),
+        ),
     ]
 
     x, y = make_xor_data(args.samples, args.noise, args.seed)
