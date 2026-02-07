@@ -226,6 +226,44 @@ def plot_losses(results: Dict[str, Dict[str, List[float]]], output_path: str) ->
     plt.savefig(output_path, dpi=150)
 
 
+def parse_seed_list(seed_list_arg: str) -> List[int]:
+    if not seed_list_arg.strip():
+        return []
+    seeds: List[int] = []
+    for token in seed_list_arg.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        seeds.append(int(token))
+    if not seeds:
+        raise ValueError("--seed-list did not contain any valid seed")
+    return seeds
+
+
+def aggregate_histories(per_seed_histories: List[Dict[str, List[float]]]) -> Dict[str, List[float]]:
+    if not per_seed_histories:
+        raise ValueError("per_seed_histories must not be empty")
+    metrics = ["train_loss", "test_loss", "train_acc", "test_acc"]
+    out: Dict[str, List[float]] = {}
+    for metric in metrics:
+        stacked = np.array([h[metric] for h in per_seed_histories], dtype=np.float64)
+        out[metric] = np.mean(stacked, axis=0).tolist()
+    return out
+
+
+def mean_std(values: List[float]) -> Tuple[float, float]:
+    arr = np.array(values, dtype=np.float64)
+    return float(np.mean(arr)), float(np.std(arr))
+
+
+def epoch_stats(values: List[Optional[int]]) -> Tuple[str, str]:
+    reached = [v for v in values if v is not None]
+    if not reached:
+        return "not reached", f"0/{len(values)}"
+    m, s = mean_std([float(v) for v in reached])
+    return f"{m:.1f}+-{s:.1f}", f"{len(reached)}/{len(values)}"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Compare activation functions with train/test loss curves (NumPy-only)."
@@ -238,12 +276,22 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--acc-threshold", type=float, default=0.90)
     parser.add_argument("--out", type=str, default="results/loss_comparison.png")
+    parser.add_argument("--num-seeds", type=int, default=1)
+    parser.add_argument("--seed-list", type=str, default="")
     parser.add_argument("--custom-n", type=int, default=2)
     parser.add_argument("--custom-alpha", type=float, default=0.75)
     parser.add_argument("--custom-beta", type=float, default=1.0)
     args = parser.parse_args()
     if args.custom_n < 0:
         raise ValueError("--custom-n must be >= 0")
+    if args.num_seeds < 1:
+        raise ValueError("--num-seeds must be >= 1")
+
+    explicit_seeds = parse_seed_list(args.seed_list)
+    if explicit_seeds:
+        seeds = explicit_seeds
+    else:
+        seeds = [args.seed + i for i in range(args.num_seeds)]
 
     acts = [
         Activation("relu", relu, relu_grad),
@@ -258,25 +306,30 @@ def main() -> None:
         ),
     ]
 
-    x, y = make_xor_data(args.samples, args.noise, args.seed)
-    split = int(len(x) * 0.8)
-    x_train, x_test = x[:split], x[split:]
-    y_train, y_test = y[:split], y[split:]
+    per_seed_results: Dict[str, List[Dict[str, List[float]]]] = {act.name: [] for act in acts}
+    for seed in seeds:
+        x, y = make_xor_data(args.samples, args.noise, seed)
+        split = int(len(x) * 0.8)
+        x_train, x_test = x[:split], x[split:]
+        y_train, y_test = y[:split], y[split:]
 
-    init_state = init_params(input_dim=2, hidden_dim=args.hidden, seed=args.seed + 1)
+        init_state = init_params(input_dim=2, hidden_dim=args.hidden, seed=seed + 1)
+        for act in acts:
+            history = train_one(
+                activation=act,
+                x_train=x_train,
+                y_train=y_train,
+                x_test=x_test,
+                y_test=y_test,
+                init_state=init_state,
+                epochs=args.epochs,
+                lr=args.lr,
+            )
+            per_seed_results[act.name].append(history)
 
-    results: Dict[str, Dict[str, List[float]]] = {}
-    for act in acts:
-        results[act.name] = train_one(
-            activation=act,
-            x_train=x_train,
-            y_train=y_train,
-            x_test=x_test,
-            y_test=y_test,
-            init_state=init_state,
-            epochs=args.epochs,
-            lr=args.lr,
-        )
+    results: Dict[str, Dict[str, List[float]]] = {
+        name: aggregate_histories(histories) for name, histories in per_seed_results.items()
+    }
 
     out_dir = os.path.dirname(args.out)
     if out_dir:
@@ -285,22 +338,32 @@ def main() -> None:
 
     print("=== Activation Comparison Summary ===")
     print(f"epochs={args.epochs}, lr={args.lr}, hidden={args.hidden}, samples={args.samples}")
+    print(f"seeds={seeds}")
     print(f"loss plot saved to: {args.out}")
     print("")
     print(
-        "activation | final_train_loss | final_test_loss | final_test_acc | "
-        "epoch_to_acc_threshold | epoch_to_95pct_loss_improve"
+        "activation | final_train_loss(mean+-std) | final_test_loss(mean+-std) | "
+        "final_test_acc(mean+-std) | epoch_to_acc_threshold(mean+-std) | "
+        "reach(acc) | epoch_to_95pct_loss_improve(mean+-std) | reach(loss)"
     )
-    print("-" * 120)
+    print("-" * 200)
 
-    for name, hist in results.items():
-        ep = first_epoch_reaching(hist["test_acc"], args.acc_threshold)
-        ep_loss = epoch_to_fractional_improvement(hist["test_loss"], fraction=0.95)
-        ep_str = str(ep) if ep is not None else "not reached"
-        ep_loss_str = str(ep_loss) if ep_loss is not None else "not reached"
+    for name, histories in per_seed_results.items():
+        train_final = [h["train_loss"][-1] for h in histories]
+        test_final = [h["test_loss"][-1] for h in histories]
+        test_acc_final = [h["test_acc"][-1] for h in histories]
+        epoch_to_acc = [first_epoch_reaching(h["test_acc"], args.acc_threshold) for h in histories]
+        epoch_to_loss = [epoch_to_fractional_improvement(h["test_loss"], fraction=0.95) for h in histories]
+
+        train_m, train_s = mean_std(train_final)
+        test_m, test_s = mean_std(test_final)
+        acc_m, acc_s = mean_std(test_acc_final)
+        ep_acc_str, ep_acc_reach = epoch_stats(epoch_to_acc)
+        ep_loss_str, ep_loss_reach = epoch_stats(epoch_to_loss)
         print(
-            f"{name:9s} | {hist['train_loss'][-1]:16.4f} | {hist['test_loss'][-1]:15.4f} |"
-            f" {hist['test_acc'][-1]:14.4f} | {ep_str:22s} | {ep_loss_str}"
+            f"{name:13s} | {train_m:.4f}+-{train_s:.4f} | {test_m:.4f}+-{test_s:.4f} |"
+            f" {acc_m:.4f}+-{acc_s:.4f} | {ep_acc_str:29s} | {ep_acc_reach:10s} |"
+            f" {ep_loss_str:35s} | {ep_loss_reach}"
         )
 
 
