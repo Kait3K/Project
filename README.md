@@ -61,11 +61,11 @@ python3 compare_activations.py --custom-n-list 0,2,4,6 --custom-n-plot-out resul
 python3 compare_activations.py --custom-n 2 --custom-alpha 0.75 --custom-beta 1.0
 ```
 
-## 調和振動子の関数系（LaTeX 記法）
+## 調和振動子の関数系
 
 この実装は、無次元化した 1 次元調和振動子の固有関数を使っています。
 
-Hermite 多項式（物理学者の定義）:
+Hermite 多項式:
 
 ```math
 \begin{aligned}
@@ -99,9 +99,3 @@ f(x)=x+\alpha\,\psi_n(\beta x)
 f'(x)=1+\alpha\beta\,\frac{d\psi_n(\beta x)}{d(\beta x)}
 ```
 
-実装との対応:
-- `compare_activations.py` の `hermite_polynomial`
-- `compare_activations.py` の `harmonic_oscillator_eigenfunction`
-- `compare_activations.py` の `harmonic_oscillator_eigenfunction_grad`
-- `compare_activations.py` の `custom_activation`
-- `compare_activations.py` の `custom_activation_grad`
